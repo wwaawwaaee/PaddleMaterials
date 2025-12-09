@@ -1,0 +1,126 @@
+Global:
+  # 1. 修改预测目标为 lumo
+  label_names: ["lumo"]
+
+  # 2. 图转换器配置
+  # 这里建议使用 CrystalGraphConverter，它更适配我们 Dataset 里的逻辑
+  # 也会被用来生成缓存文件夹的后缀名
+  graph_converter:
+    __class_name__: CrystalGraphConverter
+    __init_params__:
+        cutoff: 5.0
+
+Dataset:
+  train:
+    dataset:
+      # 3. 指定我们刚写的类名
+      __class_name__: QM9Dataset
+      __init_params__:
+        # 数据集根目录
+        path: "./data/qm9"
+        # 引用 Global 里的标签
+        property_names: ${Global.label_names}
+        # 引用 Global 里的图配置
+        build_graph_cfg: ${Global.graph_converter}
+        # (可选) 指定下载链接，不写则使用类中默认的
+        url: "https://paddle-org.bj.bcebos.com/paddlematerials/datasets/qm9/dsgdb9nsd.xyz.tar.bz2"
+    
+    # DataLoader 配置
+    num_workers: 4
+    use_shared_memory: True # 建议开启，加速读取
+    sampler:
+      __class_name__: BatchSampler
+      __init_params__:
+        shuffle: True
+        drop_last: True # 训练集通常丢弃最后一个不完整的 batch
+        batch_size: 128
+
+  val:
+    dataset:
+      __class_name__: QM9Dataset
+      __init_params__:
+        path: "./data/qm9"
+        property_names: ${Global.label_names}
+        build_graph_cfg: ${Global.graph_converter}
+    num_workers: 4
+    use_shared_memory: True
+    sampler:
+      __class_name__: BatchSampler
+      __init_params__:
+        shuffle: False
+        drop_last: False
+        batch_size: 128
+  
+  # 建议加上 test 集
+  test:
+    dataset:
+      __class_name__: QM9Dataset
+      __init_params__:
+        path: "./data/qm9"
+        property_names: ${Global.label_names}
+        build_graph_cfg: ${Global.graph_converter}
+    num_workers: 4
+    use_shared_memory: True
+    sampler:
+      __class_name__: BatchSampler
+      __init_params__:
+        shuffle: False
+        drop_last: False
+        batch_size: 128
+
+# 4. 模型配置 (切换为 CHGNet)
+Model:
+  __class_name__: CHGNet
+  __init_params__:
+    # CHGNet 的标准参数，根据显存大小调整
+    atom_fea_dim: 64
+    bond_fea_dim: 64
+    angle_fea_dim: 64
+    composition_model: "AtomEmbedding"
+    num_layers: 4
+
+# 5. 训练器配置
+Trainer:
+  max_epochs: 100 # QM9 比较快，100-200 epochs 通常足够
+  seed: 42
+  # 修改输出路径，避免覆盖别人的实验
+  output_dir: ./output/chgnet_qm9_lumo
+  save_freq: 10
+  log_freq: 10
+  start_eval_epoch: 1
+  eval_freq: 1
+  
+  # 混合精度训练，CHGNet 通常支持
+  use_amp: False 
+  amp_level: 'O1'
+  
+  # 评估指标
+  best_metric_indicator: 'eval_metric'
+  name_for_best_metric: "lumo" # 与 label_names 一致
+  greater_is_better: False     # MAE/Loss 越小越好
+
+# 6. 优化器 (通常保持默认即可)
+Optimizer:
+  __class_name__: AdamW
+  __init_params__:
+    beta1: 0.9
+    beta2: 0.999
+    weight_decay: 0.01
+    lr:
+      __class_name__: CosineAnnealingDecay # 注意 paddle 的类名可能不同，此处参考原 config
+      __init_params__:
+        learning_rate: 0.001
+        T_max: 100
+        eta_min: 1.0e-5
+
+# 7. 评价指标
+Metric:
+  # 这里必须跟 property_names 里的名字对应
+  lumo:
+    __class_name__: paddle.nn.L1Loss # 使用 MAE 作为评估指标
+    __init_params__: {}
+
+# 8. 预测配置
+Predict:
+  graph_converter: ${Global.graph_converter}
+  eval_with_no_grad: True
